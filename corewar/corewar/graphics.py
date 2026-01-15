@@ -1,12 +1,13 @@
 #! /usr/bin/env python
 # coding: utf-8
 
+import os
 import pygame
 from pygame.locals import *
 
-from core import DEFAULT_INITIAL_INSTRUCTION
-from mars import *
-from redcode import *
+from .core import DEFAULT_INITIAL_INSTRUCTION
+from .mars import *
+from .redcode import *
 
 INSTRUCTIONS_PER_LINE = 100
 INSTRUCTION_SIZE_X = 9
@@ -37,7 +38,9 @@ WARRIOR_COLORS = (((0,0,100), (0,0,255)),
 
 def load_opcode_surfaces():
     "Load the images of the opcodes from the file"
-    all_instructions = pygame.image.load('pixels/instructions.png')
+    base_path = os.path.dirname(__file__)
+    image_path = os.path.join(base_path, '..', 'pixels', 'instructions.png')
+    all_instructions = pygame.image.load(image_path)
     class Y:
         y = -INSTRUCTION_SIZE_Y
         def __call__(self):
