@@ -3,11 +3,19 @@
 
 import pygame
 from pygame.locals import *
-
-from core import DEFAULT_INITIAL_INSTRUCTION
-from mars import *
-from redcode import *
 import os
+import sys
+
+# --- FIX 1: Robust Imports (Works as script OR package) ---
+try:
+    from core import DEFAULT_INITIAL_INSTRUCTION
+    from mars import *
+    from redcode import *
+except ImportError:
+    # Fallback for package execution
+    from .core import DEFAULT_INITIAL_INSTRUCTION
+    from .mars import *
+    from .redcode import *
 
 INSTRUCTIONS_PER_LINE = 100
 INSTRUCTION_SIZE_X = 9
@@ -74,7 +82,29 @@ WARRIOR_COLORS = (((124, 32, 34), (249, 65, 68)),
 
 def load_opcode_surfaces():
     "Load the images of the opcodes from the file"
-    all_instructions = pygame.image.load('pixels/instructions.png')
+    # --- FIX 2: Dynamic Path Finding ---
+    # Find where THIS file is located
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # Try looking in 'pixels' subdirectory next to this file
+    image_path = os.path.join(current_dir, 'pixels', 'instructions.png')
+    
+    # If not there, try one level up (standard repo layout)
+    if not os.path.exists(image_path):
+        image_path = os.path.join(current_dir, '..', 'pixels', 'instructions.png')
+        
+    try:
+        all_instructions = pygame.image.load(image_path)
+    except Exception as e:
+        print(f"Error loading graphics from: {image_path}")
+        print(f"Details: {e}")
+        # Last ditch: try loading from CWD if running from strange location
+        try:
+            all_instructions = pygame.image.load('pixels/instructions.png')
+        except:
+            sys.exit(1)
+    # --- END FIX ---
+
     class Y:
         y = -INSTRUCTION_SIZE_Y
         def __call__(self):
@@ -459,4 +489,3 @@ if __name__ == "__main__":
 
     # exit pygame
     pygame.quit()
-
