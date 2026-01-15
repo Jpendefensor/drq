@@ -17,107 +17,103 @@ except ImportError:
 
 # --- CONFIGURATION ---
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL_NAME = "deepseek-coder-v2:latest"
+MODEL_NAME = "llama3.1:8b" # This fits perfectly in 15GB RAM
 OUTPUT_DIR = "generated_warriors"
 MAX_RETRIES = 5
 
-FEW_SHOT_PROMPT = """
-### Redcode Specification (ICWS'94)
-You are an expert Core War programmer. Write high-performance Redcode.
+# Optimized for Llama 3.1 logic
+FEW_SHOT_PROMPT = """You are a Core War expert. Write ICWS'94 Redcode. 
+Output ONLY the code block. Do not explain the code.
 
-### Syntax Protocol:
-1. Instruction Format: <OPCODE>.<MODIFIER> <OPERAND_A>, <OPERAND_B>
-2. Opcodes: MOV, ADD, SUB, JMP, JMZ, JMN, DJN, SPL, DAT, SLT, SEQ, SNE.
-3. Addressing: # (Immediate), $ (Direct), @ (Indirect), < (Pre-dec), > (Post-inc).
-4. No Markdown headers inside the code block.
-5. All warriors must be self-sustaining (looping).
+Example Stone Strategy:
+step  DAT #4, #4
+start ADD step, target
+      MOV step, @target
+      JMP start
+target DAT #0, #0
 
-### Strategy Definition: "The Stone"
-A 'Stone' is a fast, aggressive bomber. It uses a small, tight loop to throw DAT bombs at regular intervals across the core.
-
-### Objective:
-Write a 'Stone' warrior.
-- Line 1: Increment a pointer.
-- Line 2: Move a DAT bomb to the pointer's location.
-- Line 3: Jump back to Line 1.
-- Line 4: The DAT bomb itself.
+TASK: Write the warrior requested by the user. 
+Use labels and ensure there is a JMP loop.
 """
 
 COMPILE_ENV = {'CORESIZE': 8000, 'MAXLENGTH': 100, 'MINDISTANCE': 100}
 
 def query_ollama(prompt, history=[]):
-    # Simplified prompt to avoid confusing the model
-    full_text = f"{FEW_SHOT_PROMPT}\n"
+    # Llama 3.1 responds best to a clear distinction between instructions and task
+    full_prompt = f"{FEW_SHOT_PROMPT}\n\n"
     for item in history:
-        full_text += f"\n{item}"
-    full_text += f"\nUSER REQUEST: {prompt}\n\nAssistant: Here is the Redcode:\n```redcode\n"
+        full_prompt += f"{item}\n"
+    full_prompt += f"USER REQUEST: {prompt}\nASSISTANT: Here is the code:\n```redcode\n"
 
     payload = {
         "model": MODEL_NAME,
-        "prompt": full_text,
+        "prompt": full_prompt,
         "stream": False,
         "options": {
-            "temperature": 0.1,  # Keep it very predictable
-            "stop": ["```"]      # Tell the model to stop exactly when the block ends
+            "temperature": 0.1,
+            "num_ctx": 2048
         }
     }
     
     try:
-        response = requests.post(OLLAMA_URL, json=payload)
+        # Reduced timeout to 30s because Llama 8b should be fast
+        response = requests.post(OLLAMA_URL, json=payload, timeout=30)
         response.raise_for_status()
-        return response.json()['response']
+        return response.json().get('response', '')
     except Exception as e:
-        print(f"LLM Error: {e}")
+        print(f"\n[LLM ERROR]: {e}")
         return None
 
 def extract_redcode(text):
-    # 1. FIND THE CODE BLOCK: DeepSeek loves ```redcode ... ```
-    # This regex looks for the first code block and takes its content.
-    match = re.search(r"```(?:[a-zA-Z]+)?\n(.*?)\n```", text, re.DOTALL)
-    if match:
-        return match.group(1).strip()
+    # 1. Grab everything inside the first code block
+    match = re.search(r"```(?:\w+)?\n(.*?)```", text, re.DOTALL)
+    code = match.group(1) if match else text
     
-    # 2. FALLBACK: If no backticks, take lines that look like opcodes
     valid_ops = ["MOV", "ADD", "SUB", "MUL", "DIV", "MOD", "JMP", "JMZ", 
                  "JMN", "DJN", "SPL", "SLT", "CMP", "SEQ", "SNE", "NOP", "DAT"]
     
-    lines = []
-    for line in text.split('\n'):
-        # Just check if any valid opcode is in the line
-        if any(op in line.upper() for op in valid_ops):
-            lines.append(line.strip())
-    
-    return "\n".join(lines)
+    clean_lines = []
+    for line in code.split('\n'):
+        # 2. Strict line cleaning
+        line = line.split(';')[0].strip() # Remove comments
+        if not line: continue
+        
+        # 3. Final sanity check: Does this line actually have an opcode?
+        # This prevents "This code does X" from entering the compiler
+        upper_line = line.upper()
+        if any(f" {op}" in f" {upper_line}" or f"{op}." in upper_line or upper_line.startswith(op) for op in valid_ops):
+            clean_lines.append(line)
+                
+    return "\n".join(clean_lines)
 
 def validate_code(code_str):
     if not code_str.strip():
-        return False, "No valid Redcode instructions found."
+        return False, "No code instructions found."
     try:
         lines = code_str.split('\n')
         redcode.parse(lines, COMPILE_ENV)
         
-        # Basic survival check
+        # Survival check
         has_loop = any(op in code_str.upper() for op in ["JMP", "DJN", "SPL", "MOV 0, 1"])
         if not has_loop:
-            return False, "Warrior will die instantly (no loop)."
+            return False, "The code has no execution loop (JMP/SPL) and will die instantly."
             
         return True, None
     except Exception as e:
         return False, str(e)
 
 def generate_warrior(prompt_text, filename):
-    print(f"\nTarget: {filename}")
+    print(f"\nGenerating: {filename} with {MODEL_NAME}...")
     history = []
     
     for attempt in range(MAX_RETRIES):
-        print(f" > Attempt {attempt+1}/{MAX_RETRIES}...", end=" ")
+        print(f" > Attempt {attempt+1}/{MAX_RETRIES}...", end=" ", flush=True)
         
-        response = query_ollama(prompt_text, history)
-        if not response: 
-            print("No response from Ollama.")
+        raw_response = query_ollama(prompt_text, history)
+        if not raw_response:
             continue
-        
-        code = extract_redcode(response)
+            
+        code = extract_redcode(raw_response)
         is_valid, error_msg = validate_code(code)
         
         if is_valid:
@@ -127,16 +123,18 @@ def generate_warrior(prompt_text, filename):
             with open(path, "w") as f: f.write(code)
             return path
         else:
-            print(f"FAILED. ({error_msg})")
-            history.append(f"ERROR in previous code: {error_msg}")
-            history.append("Ensure your labels are followed by a space and a valid opcode.")
+            print(f"RETRYING... ({error_msg[:40]}...)")
+            history.append(f"USER: Fix the syntax error: {error_msg}")
 
+    print("!!! Failed after 5 attempts.")
     return None
 
 if __name__ == "__main__":
-    # Switching to DeepSeek's logical strength
     generate_warrior(
-        "Generate a 'Stone' variant with a bombing step of 127. "
-        "Use relative addressing. Ensure the labels 'loop' and 'bomb' are distinct.", 
-        "deepseek_stone_v1"
+        "Design a 'Vampire' warrior. \n"
+        "1. Create a 'trap' (pit) using a DAT instruction that kills any process. \n"
+        "2. Create a 'fang' (a JMP instruction) that points back to your trap. \n"
+        "3. Use a loop to copy your 'fang' to a new random or incrementing location in memory. \n"
+        "Goal: Ensnare the enemy process and force them to execute your trap.", 
+        "vampire_v1"
     )
